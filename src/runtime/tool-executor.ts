@@ -71,7 +71,7 @@ const HOST_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'send_message',
     description:
-      "Send a message to the user or group immediately. Use for progress updates or multiple messages.",
+      'Send a message to the user or group immediately. Use for progress updates or multiple messages.',
     parameters: {
       type: 'object',
       properties: {
@@ -199,7 +199,10 @@ const CONTAINER_TOOL_DEFINITIONS: ToolDefinition[] = [
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The bash command to execute' },
-        timeout: { type: 'number', description: 'Timeout in ms (default 120000)' },
+        timeout: {
+          type: 'number',
+          description: 'Timeout in ms (default 120000)',
+        },
       },
       required: ['command'],
     },
@@ -304,10 +307,7 @@ const CONTAINER_TOOL_DEFINITIONS: ToolDefinition[] = [
 export class DefaultToolExecutor implements IToolExecutor {
   constructor(private containerManager: ContainerManager) {}
 
-  getTools(opts: {
-    runtime: RuntimeId;
-    isMain: boolean;
-  }): ToolDefinition[] {
+  getTools(opts: { runtime: RuntimeId; isMain: boolean }): ToolDefinition[] {
     const tools = [...HOST_TOOL_DEFINITIONS, ...CONTAINER_TOOL_DEFINITIONS];
     // Non-main groups can't register groups
     if (!opts.isMain) {
@@ -340,7 +340,10 @@ export class DefaultToolExecutor implements IToolExecutor {
         return this.executeHostTool(call);
 
       default:
-        return { content: `Unhandled tool category for: ${call.name}`, isError: true };
+        return {
+          content: `Unhandled tool category for: ${call.name}`,
+          isError: true,
+        };
     }
   }
 
@@ -439,7 +442,9 @@ export class DefaultToolExecutor implements IToolExecutor {
           isMain: context.isMain,
           timestamp: new Date().toISOString(),
         });
-        return { content: `Task ${args.task_id} ${name.replace('_task', '')} requested.` };
+        return {
+          content: `Task ${args.task_id} ${name.replace('_task', '')} requested.`,
+        };
       }
 
       case 'update_task': {
@@ -483,11 +488,17 @@ export class DefaultToolExecutor implements IToolExecutor {
 
       case 'web_search':
         // TODO: Implement host-side web search (fetch + parse)
-        return { content: 'web_search not yet implemented on host', isError: true };
+        return {
+          content: 'web_search not yet implemented on host',
+          isError: true,
+        };
 
       case 'web_fetch':
         // TODO: Implement host-side web fetch (fetch + HTML-to-text)
-        return { content: 'web_fetch not yet implemented on host', isError: true };
+        return {
+          content: 'web_fetch not yet implemented on host',
+          isError: true,
+        };
 
       default:
         return { content: `Host tool not implemented: ${name}`, isError: true };

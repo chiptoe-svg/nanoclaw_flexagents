@@ -53,6 +53,10 @@ const RUNTIME_IMAGES: Record<string, string | undefined> = {
 };
 
 export const DEFAULT_RUNTIME = 'claude';
+export const TOOL_BROKER_PORT = parseInt(
+  process.env.TOOL_BROKER_PORT || '3002',
+  10,
+);
 
 /** Resolve the container image for a given runtime. */
 export function getContainerImage(runtime?: string): string {

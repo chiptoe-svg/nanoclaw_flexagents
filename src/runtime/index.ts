@@ -20,3 +20,4 @@ export {
 } from './container-manager.js';
 export { ClaudeRuntime } from './claude-runtime.js';
 export { DefaultToolExecutor } from './tool-executor.js';
+export { ToolBroker } from './tool-broker.js';
