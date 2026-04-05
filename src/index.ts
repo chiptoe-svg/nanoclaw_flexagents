@@ -423,7 +423,10 @@ async function runAgent(
 
     return 'success';
   } catch (err) {
-    logger.error({ group: group.name, err, runtime: runtime.id }, 'Agent error');
+    logger.error(
+      { group: group.name, err, runtime: runtime.id },
+      'Agent error',
+    );
     return 'error';
   }
 }

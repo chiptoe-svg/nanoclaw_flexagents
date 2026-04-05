@@ -130,10 +130,7 @@ export interface ToolExecutor {
 export interface AgentRuntime {
   readonly id: RuntimeId;
 
-  run(
-    prompt: string,
-    config: AgentRuntimeConfig,
-  ): AsyncGenerator<AgentEvent>;
+  run(prompt: string, config: AgentRuntimeConfig): AsyncGenerator<AgentEvent>;
 
   /** Send a follow-up message into an active run. */
   sendFollowUp(text: string): boolean;

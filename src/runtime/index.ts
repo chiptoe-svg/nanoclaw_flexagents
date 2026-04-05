@@ -14,5 +14,8 @@ export type {
   ToolResult,
 } from './types.js';
 export { DefaultContainerManager } from './container-manager.js';
-export { writeTasksSnapshot, writeGroupsSnapshot } from './container-manager.js';
+export {
+  writeTasksSnapshot,
+  writeGroupsSnapshot,
+} from './container-manager.js';
 export { ClaudeRuntime } from './claude-runtime.js';
