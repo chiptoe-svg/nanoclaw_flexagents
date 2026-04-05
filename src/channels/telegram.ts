@@ -4,7 +4,12 @@ import path from 'path';
 
 import { Api, Bot } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import {
+  getCurrentAuthMode,
+  hasValidOAuthCredentials,
+  switchAuthMode,
+} from '../auth-switch.js';
+import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
@@ -132,9 +137,92 @@ export class TelegramChannel implements Channel {
       ctx.reply(`${ASSISTANT_NAME} is online.`);
     });
 
+    // Command to view or switch auth mode
+    this.bot.command('auth', async (ctx) => {
+      const args = ctx.message?.text?.split(/\s+/).slice(1) || [];
+      const current = getCurrentAuthMode();
+
+      if (args.length === 0) {
+        const label =
+          current === 'api-key' ? 'API Key' : 'OAuth (Subscription)';
+        let credStatus: string;
+        if (current === 'api-key') {
+          credStatus = 'active (API key in .env)';
+        } else {
+          const envSecrets = readEnvFile([
+            'CLAUDE_CODE_OAUTH_TOKEN',
+            'ANTHROPIC_AUTH_TOKEN',
+          ]);
+          const hasEnvToken = !!(
+            envSecrets.CLAUDE_CODE_OAUTH_TOKEN ||
+            envSecrets.ANTHROPIC_AUTH_TOKEN
+          );
+          const hasCliCreds = hasValidOAuthCredentials();
+          if (hasEnvToken && hasCliCreds) {
+            credStatus = 'active (.env token + CLI auto-refresh)';
+          } else if (hasEnvToken) {
+            credStatus = 'active (.env token)';
+          } else if (hasCliCreds) {
+            credStatus = 'active (CLI auto-refresh)';
+          } else {
+            credStatus = 'no credentials found';
+          }
+        }
+        ctx.reply(
+          `Auth mode: *${label}*\nCredentials: ${credStatus}\n\nSwitch with:\n\`/auth api\` — use API key\n\`/auth oauth\` — use subscription`,
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
+
+      const target = args[0].toLowerCase();
+      if (target !== 'api' && target !== 'oauth') {
+        ctx.reply('Usage: `/auth api` or `/auth oauth`', {
+          parse_mode: 'Markdown',
+        });
+        return;
+      }
+
+      const newMode = target === 'api' ? 'api-key' : 'oauth';
+      if (newMode === current) {
+        const label = current === 'api-key' ? 'API Key' : 'OAuth';
+        ctx.reply(`Already using ${label}.`);
+        return;
+      }
+
+      // Check OAuth credentials before switching
+      if (newMode === 'oauth' && !hasValidOAuthCredentials()) {
+        ctx.reply(
+          'No valid OAuth credentials found.\nRun `claude login` on the server first, then try again.',
+          { parse_mode: 'Markdown' },
+        );
+        return;
+      }
+
+      switchAuthMode(newMode as 'api-key' | 'oauth');
+      const label = newMode === 'api-key' ? 'API Key' : 'OAuth (Subscription)';
+      ctx.reply(`Switching to *${label}*...`, {
+        parse_mode: 'Markdown',
+      });
+
+      // Write flag so the bot sends a ready message after restart
+      const flagPath = path.join(DATA_DIR, 'auth-switch-pending.json');
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(
+        flagPath,
+        JSON.stringify({ chatId: ctx.chat.id, mode: newMode }),
+      );
+
+      // Restart the service so the credential proxy picks up the new mode
+      logger.info({ newMode }, 'Auth mode changed, restarting service');
+      setTimeout(() => {
+        process.exit(0); // launchd/systemd will restart us
+      }, 1000);
+    });
+
     // Telegram bot commands handled above — skip them in the general handler
     // so they don't also get stored as messages. All other /commands flow through.
-    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping']);
+    const TELEGRAM_BOT_COMMANDS = new Set(['chatid', 'ping', 'auth']);
 
     this.bot.on('message:text', async (ctx) => {
       if (ctx.message.text.startsWith('/')) {
@@ -344,7 +432,7 @@ export class TelegramChannel implements Channel {
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {
       this.bot!.start({
-        onStart: (botInfo) => {
+        onStart: async (botInfo) => {
           logger.info(
             { username: botInfo.username, id: botInfo.id },
             'Telegram bot connected',
@@ -353,6 +441,26 @@ export class TelegramChannel implements Channel {
           console.log(
             `  Send /chatid to the bot to get a chat's registration ID\n`,
           );
+
+          // Send ready message if auth was just switched
+          try {
+            const flagPath = path.join(DATA_DIR, 'auth-switch-pending.json');
+            if (fs.existsSync(flagPath)) {
+              const flag = JSON.parse(fs.readFileSync(flagPath, 'utf-8'));
+              fs.unlinkSync(flagPath);
+              const mode = getCurrentAuthMode();
+              const label =
+                mode === 'api-key' ? 'API Key' : 'OAuth (Subscription)';
+              await this.bot!.api.sendMessage(
+                flag.chatId,
+                `${ASSISTANT_NAME} is back online.\nAuth mode: *${label}*`,
+                { parse_mode: 'Markdown' },
+              );
+            }
+          } catch (err) {
+            logger.debug({ err }, 'Failed to send auth switch notification');
+          }
+
           resolve();
         },
       });

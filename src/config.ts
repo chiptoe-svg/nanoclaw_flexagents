@@ -40,6 +40,21 @@ export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+
+// Per-runtime container images. Defaults fall back to CONTAINER_IMAGE for claude.
+// TODO: Add entries here as new runtime adapters are built (e.g. openai, google-adk).
+const RUNTIME_IMAGES: Record<string, string | undefined> = {
+  claude: process.env.CONTAINER_IMAGE_CLAUDE || undefined, // falls back to CONTAINER_IMAGE
+  openai: process.env.CONTAINER_IMAGE_OPENAI || 'nanoclaw-openai-agent:latest',
+};
+
+export const DEFAULT_RUNTIME = 'claude';
+
+/** Resolve the container image for a given runtime. */
+export function getContainerImage(runtime?: string): string {
+  const r = runtime || DEFAULT_RUNTIME;
+  return RUNTIME_IMAGES[r] || CONTAINER_IMAGE;
+}
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,

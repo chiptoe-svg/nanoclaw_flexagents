@@ -1,22 +1,15 @@
 /**
- * NanoClaw Agent Runner
- * Runs inside a container, receives config via stdin, outputs result to stdout
+ * NanoClaw Agent Runner — Claude SDK
  *
- * Input protocol:
- *   Stdin: Full ContainerInput JSON (read until EOF, like before)
- *   IPC:   Follow-up messages written as JSON files to /workspace/ipc/input/
- *          Files: {type:"message", text:"..."}.json — polled and consumed
- *          Sentinel: /workspace/ipc/input/_close — signals session end
+ * Claude-specific runner that calls @anthropic-ai/claude-agent-sdk query().
+ * Shared plumbing (IO, IPC, MessageStream) lives in shared.ts.
  *
- * Stdout protocol:
- *   Each result is wrapped in OUTPUT_START_MARKER / OUTPUT_END_MARKER pairs.
- *   Multiple results may be emitted (one per agent teams result).
- *   Final marker after loop ends signals completion.
+ * Input/output protocol: see shared.ts (ContainerInput/ContainerOutput).
+ * IPC protocol: follow-up messages via /workspace/ipc/input/, _close sentinel.
  */
 
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
 import {
   query,
   HookCallback,
@@ -24,22 +17,27 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
 
-interface ContainerInput {
-  prompt: string;
-  sessionId?: string;
-  groupFolder: string;
-  chatJid: string;
-  isMain: boolean;
-  isScheduledTask?: boolean;
-  assistantName?: string;
-  script?: string;
-}
+import {
+  ContainerInput,
+  ContainerOutput,
+  IPC_INPUT_DIR,
+  MessageStream,
+  drainIpcInput,
+  log,
+  readStdin,
+  runScript,
+  shouldClose,
+  waitForIpcMessage,
+  writeOutput,
+} from './shared.js';
 
-interface ContainerOutput {
-  status: 'success' | 'error';
-  result: string | null;
-  newSessionId?: string;
-  error?: string;
+// --- Claude SDK types ---
+
+interface SDKUserMessage {
+  type: 'user';
+  message: { role: 'user'; content: string };
+  parent_tool_use_id: null;
+  session_id: string;
 }
 
 interface SessionEntry {
@@ -53,78 +51,11 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
-interface SDKUserMessage {
-  type: 'user';
-  message: { role: 'user'; content: string };
-  parent_tool_use_id: null;
-  session_id: string;
-}
+// --- Transcript archiving (Claude transcript format) ---
 
-const IPC_INPUT_DIR = '/workspace/ipc/input';
-const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
-const IPC_POLL_MS = 500;
-
-/**
- * Push-based async iterable for streaming user messages to the SDK.
- * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
- */
-class MessageStream {
-  private queue: SDKUserMessage[] = [];
-  private waiting: (() => void) | null = null;
-  private done = false;
-
-  push(text: string): void {
-    this.queue.push({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-      session_id: '',
-    });
-    this.waiting?.();
-  }
-
-  end(): void {
-    this.done = true;
-    this.waiting?.();
-  }
-
-  async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage> {
-    while (true) {
-      while (this.queue.length > 0) {
-        yield this.queue.shift()!;
-      }
-      if (this.done) return;
-      await new Promise<void>((r) => {
-        this.waiting = r;
-      });
-      this.waiting = null;
-    }
-  }
-}
-
-async function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => {
-      data += chunk;
-    });
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', reject);
-  });
-}
-
-const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
-
-function writeOutput(output: ContainerOutput): void {
-  console.log(OUTPUT_START_MARKER);
-  console.log(JSON.stringify(output));
-  console.log(OUTPUT_END_MARKER);
-}
-
-function log(message: string): void {
-  console.error(`[agent-runner] ${message}`);
+interface ParsedMessage {
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 function getSessionSummary(
@@ -156,57 +87,6 @@ function getSessionSummary(
   return null;
 }
 
-/**
- * Archive the full transcript to conversations/ before compaction.
- */
-function createPreCompactHook(assistantName?: string): HookCallback {
-  return async (input, _toolUseId, _context) => {
-    const preCompact = input as PreCompactHookInput;
-    const transcriptPath = preCompact.transcript_path;
-    const sessionId = preCompact.session_id;
-
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      log('No transcript found for archiving');
-      return {};
-    }
-
-    try {
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const messages = parseTranscript(content);
-
-      if (messages.length === 0) {
-        log('No messages to archive');
-        return {};
-      }
-
-      const summary = getSessionSummary(sessionId, transcriptPath);
-      const name = summary ? sanitizeFilename(summary) : generateFallbackName();
-
-      const conversationsDir = '/workspace/group/conversations';
-      fs.mkdirSync(conversationsDir, { recursive: true });
-
-      const date = new Date().toISOString().split('T')[0];
-      const filename = `${date}-${name}.md`;
-      const filePath = path.join(conversationsDir, filename);
-
-      const markdown = formatTranscriptMarkdown(
-        messages,
-        summary,
-        assistantName,
-      );
-      fs.writeFileSync(filePath, markdown);
-
-      log(`Archived conversation to ${filePath}`);
-    } catch (err) {
-      log(
-        `Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    return {};
-  };
-}
-
 function sanitizeFilename(summary: string): string {
   return summary
     .toLowerCase()
@@ -218,11 +98,6 @@ function sanitizeFilename(summary: string): string {
 function generateFallbackName(): string {
   const time = new Date();
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
-}
-
-interface ParsedMessage {
-  role: 'user' | 'assistant';
-  content: string;
 }
 
 function parseTranscript(content: string): ParsedMessage[] {
@@ -289,87 +164,80 @@ function formatTranscriptMarkdown(
   return lines.join('\n');
 }
 
+// --- Claude pre-compact hook ---
+
 /**
- * Check for _close sentinel.
+ * Archive the full transcript to conversations/ before compaction.
+ * Uses Claude SDK's HookCallback interface.
  */
-function shouldClose(): boolean {
-  if (fs.existsSync(IPC_INPUT_CLOSE_SENTINEL)) {
+function createPreCompactHook(assistantName?: string): HookCallback {
+  return async (input, _toolUseId, _context) => {
+    const preCompact = input as PreCompactHookInput;
+    const transcriptPath = preCompact.transcript_path;
+    const sessionId = preCompact.session_id;
+
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+      log('No transcript found for archiving');
+      return {};
+    }
+
     try {
-      fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL);
-    } catch {
-      /* ignore */
+      const content = fs.readFileSync(transcriptPath, 'utf-8');
+      const messages = parseTranscript(content);
+
+      if (messages.length === 0) {
+        log('No messages to archive');
+        return {};
+      }
+
+      const summary = getSessionSummary(sessionId, transcriptPath);
+      const name = summary ? sanitizeFilename(summary) : generateFallbackName();
+
+      const conversationsDir = '/workspace/group/conversations';
+      fs.mkdirSync(conversationsDir, { recursive: true });
+
+      const date = new Date().toISOString().split('T')[0];
+      const filename = `${date}-${name}.md`;
+      const filePath = path.join(conversationsDir, filename);
+
+      const markdown = formatTranscriptMarkdown(
+        messages,
+        summary,
+        assistantName,
+      );
+      fs.writeFileSync(filePath, markdown);
+
+      log(`Archived conversation to ${filePath}`);
+    } catch (err) {
+      log(
+        `Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    return true;
-  }
-  return false;
+
+    return {};
+  };
 }
 
-/**
- * Drain all pending IPC input messages.
- * Returns messages found, or empty array.
- */
-function drainIpcInput(): string[] {
-  try {
-    fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
-    const files = fs
-      .readdirSync(IPC_INPUT_DIR)
-      .filter((f) => f.endsWith('.json'))
-      .sort();
-
-    const messages: string[] = [];
-    for (const file of files) {
-      const filePath = path.join(IPC_INPUT_DIR, file);
-      try {
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        fs.unlinkSync(filePath);
-        if (data.type === 'message' && data.text) {
-          messages.push(data.text);
-        }
-      } catch (err) {
-        log(
-          `Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        try {
-          fs.unlinkSync(filePath);
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    return messages;
-  } catch (err) {
-    log(`IPC drain error: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
-  }
-}
+// --- Claude SDK query ---
 
 /**
- * Wait for a new IPC message or _close sentinel.
- * Returns the messages as a single string, or null if _close.
+ * Convert a string MessageStream into SDK-format user messages.
  */
-function waitForIpcMessage(): Promise<string | null> {
-  return new Promise((resolve) => {
-    const poll = () => {
-      if (shouldClose()) {
-        resolve(null);
-        return;
-      }
-      const messages = drainIpcInput();
-      if (messages.length > 0) {
-        resolve(messages.join('\n'));
-        return;
-      }
-      setTimeout(poll, IPC_POLL_MS);
+async function* toSdkMessages(
+  stream: MessageStream,
+): AsyncGenerator<SDKUserMessage> {
+  for await (const text of stream) {
+    yield {
+      type: 'user',
+      message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      session_id: '',
     };
-    poll();
-  });
+  }
 }
 
 /**
- * Run a single query and stream results via writeOutput.
- * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
- * allowing agent teams subagents to run to completion.
- * Also pipes IPC messages into the stream during the query.
+ * Run a single Claude SDK query and stream results via writeOutput.
  */
 async function runQuery(
   prompt: string,
@@ -403,9 +271,9 @@ async function runQuery(
       log(`Piping IPC message into active query (${text.length} chars)`);
       stream.push(text);
     }
-    setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
+    setTimeout(pollIpcDuringQuery, 500);
   };
-  setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
+  setTimeout(pollIpcDuringQuery, 500);
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
@@ -420,7 +288,6 @@ async function runQuery(
   }
 
   // Discover additional directories mounted at /workspace/extra/*
-  // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
   const extraBase = '/workspace/extra';
   if (fs.existsSync(extraBase)) {
@@ -436,7 +303,7 @@ async function runQuery(
   }
 
   for await (const message of query({
-    prompt: stream,
+    prompt: toSdkMessages(stream),
     options: {
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
@@ -544,61 +411,7 @@ async function runQuery(
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
-interface ScriptResult {
-  wakeAgent: boolean;
-  data?: unknown;
-}
-
-const SCRIPT_TIMEOUT_MS = 30_000;
-
-async function runScript(script: string): Promise<ScriptResult | null> {
-  const scriptPath = '/tmp/task-script.sh';
-  fs.writeFileSync(scriptPath, script, { mode: 0o755 });
-
-  return new Promise((resolve) => {
-    execFile(
-      'bash',
-      [scriptPath],
-      {
-        timeout: SCRIPT_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-        env: process.env,
-      },
-      (error, stdout, stderr) => {
-        if (stderr) {
-          log(`Script stderr: ${stderr.slice(0, 500)}`);
-        }
-
-        if (error) {
-          log(`Script error: ${error.message}`);
-          return resolve(null);
-        }
-
-        // Parse last non-empty line of stdout as JSON
-        const lines = stdout.trim().split('\n');
-        const lastLine = lines[lines.length - 1];
-        if (!lastLine) {
-          log('Script produced no output');
-          return resolve(null);
-        }
-
-        try {
-          const result = JSON.parse(lastLine);
-          if (typeof result.wakeAgent !== 'boolean') {
-            log(
-              `Script output missing wakeAgent boolean: ${lastLine.slice(0, 200)}`,
-            );
-            return resolve(null);
-          }
-          resolve(result as ScriptResult);
-        } catch {
-          log(`Script output is not valid JSON: ${lastLine.slice(0, 200)}`);
-          resolve(null);
-        }
-      },
-    );
-  });
-}
+// --- Main ---
 
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
@@ -636,7 +449,7 @@ async function main(): Promise<void> {
 
   // Clean up stale _close sentinel from previous container runs
   try {
-    fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL);
+    fs.unlinkSync(path.join(IPC_INPUT_DIR, '_close'));
   } catch {
     /* ignore */
   }
@@ -698,8 +511,6 @@ async function main(): Promise<void> {
       }
 
       // If _close was consumed during the query, exit immediately.
-      // Don't emit a session-update marker (it would reset the host's
-      // idle timer and cause a 30-min delay before the next _close).
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
         break;

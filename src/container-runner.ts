@@ -7,12 +7,13 @@ import fs from 'fs';
 import path from 'path';
 
 import {
-  CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  DEFAULT_RUNTIME,
   GROUPS_DIR,
+  getContainerImage,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
@@ -55,6 +56,10 @@ interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
+}
+
+function getRuntime(group: RegisteredGroup): string {
+  return group.containerConfig?.runtime || DEFAULT_RUNTIME;
 }
 
 function buildVolumeMounts(
@@ -123,55 +128,60 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
-    );
-  }
+  const runtime = getRuntime(group);
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+  // Claude runtime: per-group .claude/ sessions directory with SDK settings and skills
+  // Other runtimes: create a minimal home directory (no Claude-specific config)
+  if (runtime === 'claude') {
+    const groupSessionsDir = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      '.claude',
+    );
+    fs.mkdirSync(groupSessionsDir, { recursive: true });
+    const settingsFile = path.join(groupSessionsDir, 'settings.json');
+    if (!fs.existsSync(settingsFile)) {
+      fs.writeFileSync(
+        settingsFile,
+        JSON.stringify(
+          {
+            env: {
+              // Enable agent swarms (subagent orchestration)
+              // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
+              CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+              // Load CLAUDE.md from additional mounted directories
+              // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
+              CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+              // Enable Claude's memory feature (persists user preferences between sessions)
+              // https://code.claude.com/docs/en/memory#manage-auto-memory
+              CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+            },
+          },
+          null,
+          2,
+        ) + '\n',
+      );
     }
+
+    // Sync skills from container/skills/ into each group's .claude/skills/
+    const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+    const skillsDst = path.join(groupSessionsDir, 'skills');
+    if (fs.existsSync(skillsSrc)) {
+      for (const skillDir of fs.readdirSync(skillsSrc)) {
+        const srcDir = path.join(skillsSrc, skillDir);
+        if (!fs.statSync(srcDir).isDirectory()) continue;
+        const dstDir = path.join(skillsDst, skillDir);
+        fs.cpSync(srcDir, dstDir, { recursive: true });
+      }
+    }
+    mounts.push({
+      hostPath: groupSessionsDir,
+      containerPath: '/home/node/.claude',
+      readonly: false,
+    });
   }
-  mounts.push({
-    hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
-    readonly: false,
-  });
+  // TODO: Add runtime-specific home directory setup for other runtimes here
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
@@ -188,10 +198,13 @@ function buildVolumeMounts(
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
+  // TODO: When non-claude runtimes have their own runner, resolve the source
+  // directory based on runtime (e.g. container/openai-runner/src).
+  const runnerDirName = runtime === 'claude' ? 'agent-runner' : 'agent-runner';
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
-    'agent-runner',
+    runnerDirName,
     'src',
   );
   const groupAgentRunnerDir = path.join(
@@ -234,6 +247,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  image: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -278,7 +292,7 @@ function buildContainerArgs(
     }
   }
 
-  args.push(CONTAINER_IMAGE);
+  args.push(image);
 
   return args;
 }
@@ -297,7 +311,8 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const image = getContainerImage(getRuntime(group));
+  const containerArgs = buildContainerArgs(mounts, containerName, image);
 
   logger.debug(
     {

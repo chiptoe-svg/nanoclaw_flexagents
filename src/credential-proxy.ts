@@ -9,7 +9,13 @@
  *             API key via /api/oauth/claude_cli/create_api_key.
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
+ *
+ * OAuth token source (in order of priority):
+ *   1. CLAUDE_CODE_OAUTH_TOKEN in .env (static, user-managed)
+ *   2. ~/.claude/.credentials.json (auto-refreshed by Claude CLI)
  */
+import fs from 'fs';
+import path from 'path';
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
@@ -21,6 +27,65 @@ export type AuthMode = 'api-key' | 'oauth';
 
 export interface ProxyConfig {
   authMode: AuthMode;
+}
+
+interface ClaudeCredentials {
+  claudeAiOauth?: {
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  };
+}
+
+const CLAUDE_CREDENTIALS_PATH = path.join(
+  process.env.HOME || '/home/node',
+  '.claude',
+  '.credentials.json',
+);
+
+// Buffer: refresh 5 minutes before expiry
+const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+
+let cachedOAuthToken: string | null = null;
+let cachedExpiresAt = 0;
+
+/**
+ * Read the OAuth access token, preferring .env but falling back to
+ * Claude CLI's credentials file. Returns null if neither is available.
+ */
+function getOAuthToken(envToken?: string): string | null {
+  // Static token from .env always wins
+  if (envToken) return envToken;
+
+  // Check if cached token is still valid
+  if (cachedOAuthToken && Date.now() < cachedExpiresAt - REFRESH_BUFFER_MS) {
+    return cachedOAuthToken;
+  }
+
+  // Read from Claude CLI credentials
+  try {
+    if (!fs.existsSync(CLAUDE_CREDENTIALS_PATH)) return null;
+    const creds: ClaudeCredentials = JSON.parse(
+      fs.readFileSync(CLAUDE_CREDENTIALS_PATH, 'utf-8'),
+    );
+    if (!creds.claudeAiOauth?.accessToken) return null;
+
+    cachedOAuthToken = creds.claudeAiOauth.accessToken;
+    cachedExpiresAt = creds.claudeAiOauth.expiresAt;
+
+    const expiresIn = Math.round(
+      (cachedExpiresAt - Date.now()) / 1000 / 60 / 60,
+    );
+    logger.debug(
+      { expiresInHours: expiresIn },
+      'Loaded OAuth token from Claude CLI credentials',
+    );
+
+    return cachedOAuthToken;
+  } catch (err) {
+    logger.warn({ err }, 'Failed to read Claude CLI credentials');
+    return null;
+  }
 }
 
 export function startCredentialProxy(
@@ -35,7 +100,7 @@ export function startCredentialProxy(
   ]);
 
   const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
+  const envOAuthToken =
     secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
 
   const upstreamUrl = new URL(
@@ -73,8 +138,9 @@ export function startCredentialProxy(
           // x-api-key only, so they pass through without token injection.
           if (headers['authorization']) {
             delete headers['authorization'];
-            if (oauthToken) {
-              headers['authorization'] = `Bearer ${oauthToken}`;
+            const token = getOAuthToken(envOAuthToken);
+            if (token) {
+              headers['authorization'] = `Bearer ${token}`;
             }
           }
         }
