@@ -234,6 +234,24 @@ async function* toSdkMessages(
   }
 }
 
+/** Shared MCP server config used by both runtimes */
+function getMcpServerConfig(
+  mcpServerPath: string,
+  containerInput: ContainerInput,
+) {
+  return {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+  };
+}
+
 async function runClaudeQuery(
   prompt: string,
   sessionId: string | undefined,
@@ -346,17 +364,7 @@ async function runClaudeQuery(
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-      },
+      mcpServers: getMcpServerConfig(mcpServerPath, containerInput),
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
@@ -447,6 +455,35 @@ async function runCodexQuery(
     log(`Assembled AGENTS.md from ${agentsParts.length} source(s)`);
   }
 
+  // Write MCP server config for Codex so it can use NanoClaw IPC tools
+  const codexConfigDir = path.join(
+    process.env.HOME || '/home/node',
+    '.codex',
+  );
+  fs.mkdirSync(codexConfigDir, { recursive: true });
+  const configTomlPath = path.join(codexConfigDir, 'config.toml');
+
+  // Preserve existing config, append/update MCP section
+  let existingConfig = '';
+  if (fs.existsSync(configTomlPath)) {
+    existingConfig = fs.readFileSync(configTomlPath, 'utf-8');
+  }
+  if (!existingConfig.includes('[mcp_servers.nanoclaw]')) {
+    const mcpConfig = `
+[mcp_servers.nanoclaw]
+type = "stdio"
+command = "node"
+args = ["${mcpServerPath}"]
+
+[mcp_servers.nanoclaw.env]
+NANOCLAW_CHAT_JID = "${containerInput.chatJid}"
+NANOCLAW_GROUP_FOLDER = "${containerInput.groupFolder}"
+NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
+`;
+    fs.writeFileSync(configTomlPath, existingConfig + mcpConfig);
+    log('Wrote NanoClaw MCP config to Codex config.toml');
+  }
+
   const codex = new Codex({
     apiKey: process.env.OPENAI_API_KEY,
     baseUrl: process.env.OPENAI_BASE_URL,
@@ -491,6 +528,34 @@ async function runCodexQuery(
     const resultText = turn.finalResponse || null;
     if (turn.usage) {
       log(`Codex usage: ${turn.usage.input_tokens} in, ${turn.usage.output_tokens} out`);
+    }
+
+    // Archive conversation to conversations/ folder
+    if (resultText) {
+      try {
+        const conversationsDir = '/workspace/group/conversations';
+        fs.mkdirSync(conversationsDir, { recursive: true });
+        const date = new Date().toISOString().split('T')[0];
+        const name = sanitizeFilename(
+          prompt.slice(0, 50).replace(/\n/g, ' '),
+        );
+        const filename = `${date}-${name || 'conversation'}.md`;
+        const filePath = path.join(conversationsDir, filename);
+        const markdown = formatTranscriptMarkdown(
+          [
+            { role: 'user', content: prompt },
+            { role: 'assistant', content: resultText },
+          ],
+          prompt.slice(0, 50),
+          containerInput.assistantName,
+        );
+        fs.writeFileSync(filePath, markdown);
+        log(`Archived Codex conversation to ${filePath}`);
+      } catch (err) {
+        log(
+          `Failed to archive Codex conversation: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     writeOutput({

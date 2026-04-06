@@ -1,56 +1,84 @@
-# NanoClaw
+# CU Agent
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Multi-runtime personal assistant built on NanoClaw. Supports OpenAI (Codex) and Claude runtimes.
 
-## Quick Context
+## Architecture
 
-Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Four-layer system:
+1. **App Shell** — channels, state, scheduling, IPC (`src/index.ts`)
+2. **AgentRuntime** — runtime adapters that delegate to containers (`src/runtime/`)
+3. **Tool Layer** — SDK-native tools inside containers + ToolExecutor for future local models
+4. **Model Layer** — per-group model selection via container config
+
+Both runtimes run inside the same container image. The agent-runner detects the runtime from `ContainerInput.runtime` and uses the appropriate SDK.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
+| `src/index.ts` | Orchestrator: state, message loop, runtime invocation |
+| `src/runtime/types.ts` | AgentRuntime, ContainerManager, ToolExecutor interfaces |
+| `src/runtime/claude-runtime.ts` | Claude adapter (delegates to container) |
+| `src/runtime/openai-runtime.ts` | OpenAI/Codex adapter (delegates to container) |
+| `src/runtime/container-manager.ts` | Container lifecycle management |
+| `src/runtime/tool-executor.ts` | Host-side tool layer (IPC tools, skill discovery) |
+| `src/runtime/tool-broker.ts` | WebSocket server for tool-runner containers (future local models) |
+| `src/container-runner.ts` | Container spawning, mounts, credential injection |
 | `src/channels/registry.ts` | Channel registry (self-registration at startup) |
 | `src/ipc.ts` | IPC watcher and task processing |
-| `src/router.ts` | Message formatting and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
-| `src/db.ts` | SQLite operations |
-| `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+| `src/config.ts` | Config: runtime, model, trigger, paths, intervals |
+| `src/credential-proxy.ts` | Anthropic credential proxy (Claude runtime) |
+| `src/auth-switch.ts` | Toggle between API key and OAuth modes |
+| `src/task-scheduler.ts` | Runs scheduled tasks via AgentRuntime |
+| `container/agent-runner/src/index.ts` | In-container agent loop (both Claude and Codex) |
+| `container/agent-runner/src/shared.ts` | Shared container plumbing (IO, IPC, MessageStream) |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | MCP server for NanoClaw IPC tools |
+| `container/tool-runner/` | Lightweight container for sandboxed tool execution |
+| `container/skills/` | Skills loaded inside agent containers |
+| `groups/{name}/AGENT.md` | Per-group agent persona (runtime-agnostic) |
+| `groups/global/AGENT.md` | Global persona shared across all groups |
+| `groups/{name}/memory/` | Persistent memory (user profile, knowledge) |
 
-## Secrets / Credentials / Proxy (OneCLI)
+## Runtime Configuration
 
-API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
+Default runtime and model set in `.env`:
+```
+DEFAULT_RUNTIME=openai
+OPENAI_MODEL=gpt-5.4-mini
+```
+
+Per-group override via `containerConfig` in the database:
+```sql
+UPDATE registered_groups SET container_config = '{"runtime":"claude","model":"claude-sonnet-4-6"}' WHERE jid = '...';
+```
+
+Telegram commands:
+- `/model` — view/switch model for this group
+- `/auth` — view/switch auth mode
+- `/ping` — bot status
+- `/chatid` — get chat registration ID
+
+## Credentials
+
+**OpenAI (Codex):** Subscription auth via `codex auth login` on the host. Credentials in `~/.codex/auth.json` are synced to containers. Falls back to `OPENAI_API_KEY` in `.env`.
+
+**Claude:** OAuth token via `claude setup-token` stored in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`. Auto-refreshes from `~/.claude/.credentials.json` if available. Credential proxy on port 3001 injects into Claude containers.
+
+## Agent Persona (AGENT.md)
+
+`AGENT.md` is the canonical persona file. It's runtime-agnostic.
+
+Inside the container, the agent-runner assembles the final instructions:
+- **Codex:** concatenates `global/AGENT.md` + `group/AGENT.md` → writes `AGENTS.md`
+- **Claude:** copies `AGENT.md` → `CLAUDE.md` for SDK discovery, injects global via system prompt
+
+Fallback: `CLAUDE.md` is read if `AGENT.md` doesn't exist (backward compatible).
 
 ## Skills
 
-Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
-
-- **Feature skills** — merge a `skill/*` branch to add capabilities (e.g. `/add-telegram`, `/add-slack`)
-- **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
-- **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
-- **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
-
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
-
-## Contributing
-
-Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
+Container skills in `container/skills/` are synced to both `.claude/skills/` and `.codex/skills/` per group. Same SKILL.md format works with both SDKs.
 
 ## Development
-
-Run commands directly—don't tell the user to run them.
 
 ```bash
 npm run dev          # Run with hot reload
@@ -58,22 +86,12 @@ npm run build        # Compile TypeScript
 ./container/build.sh # Rebuild agent container
 ```
 
-Service management:
+Service management (macOS):
 ```bash
-# macOS (launchd)
 launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
-
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
 ```
-
-## Troubleshooting
-
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
 ## Container Build Cache
 

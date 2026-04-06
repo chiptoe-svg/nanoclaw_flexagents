@@ -202,6 +202,18 @@ async function runTask(
         }
         if (streamedOutput.status === 'error') {
           error = streamedOutput.error || 'Unknown error';
+          // Clear stale sessions detected in streamed errors
+          if (
+            sessionId &&
+            streamedOutput.error &&
+            runtime.shouldClearSession?.(streamedOutput.error)
+          ) {
+            logger.warn(
+              { taskId: task.id, error: streamedOutput.error },
+              'Stale session detected in task — clearing',
+            );
+            deps.setSessions(task.group_folder, '');
+          }
         }
       },
     })) {

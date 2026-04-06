@@ -8,11 +8,7 @@
  * Both runtimes share the same container image, MCP server, IPC protocol,
  * and output format. The only difference is which SDK drives the agent loop.
  */
-import fs from 'fs';
-import path from 'path';
-
-import { DEFAULT_MODEL, GROUPS_DIR } from '../config.js';
-import { logger } from '../logger.js';
+import { DEFAULT_MODEL } from '../config.js';
 
 import type {
   AgentEvent,
