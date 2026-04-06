@@ -11,16 +11,11 @@ export type AgentSdkFactory = () => AgentRuntime;
 
 const registry = new Map<string, AgentSdkFactory>();
 
-export function registerAgentSdk(
-  name: string,
-  factory: AgentSdkFactory,
-): void {
+export function registerAgentSdk(name: string, factory: AgentSdkFactory): void {
   registry.set(name, factory);
 }
 
-export function getAgentSdkFactory(
-  name: string,
-): AgentSdkFactory | undefined {
+export function getAgentSdkFactory(name: string): AgentSdkFactory | undefined {
   return registry.get(name);
 }
 

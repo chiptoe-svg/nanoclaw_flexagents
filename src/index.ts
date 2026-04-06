@@ -27,7 +27,10 @@ import {
 } from './runtime/registry.js';
 import { DefaultContainerManager } from './runtime/container-manager.js';
 import { DefaultToolExecutor } from './runtime/tool-executor.js';
-import { writeTasksSnapshot, writeGroupsSnapshot } from './runtime/container-manager.js';
+import {
+  writeTasksSnapshot,
+  writeGroupsSnapshot,
+} from './runtime/container-manager.js';
 import type { AgentRuntime, ContainerOutput } from './runtime/types.js';
 import {
   cleanupOrphans,
