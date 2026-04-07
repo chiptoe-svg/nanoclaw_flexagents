@@ -50,8 +50,9 @@ export const CONTAINER_IMAGE =
 // Per-runtime container images. Both runtimes share the same image by default
 // (agent-runner detects runtime from ContainerInput and uses the right SDK).
 const RUNTIME_IMAGES: Record<string, string | undefined> = {
-  claude: process.env.CONTAINER_IMAGE_CLAUDE || undefined, // falls back to CONTAINER_IMAGE
-  codex: process.env.CONTAINER_IMAGE_CODEX || undefined, // falls back to CONTAINER_IMAGE
+  claude: process.env.CONTAINER_IMAGE_CLAUDE || undefined,
+  codex: process.env.CONTAINER_IMAGE_CODEX || undefined,
+  gemini: process.env.CONTAINER_IMAGE_GEMINI || undefined,
 };
 
 export const DEFAULT_RUNTIME = envConfig.DEFAULT_RUNTIME || 'claude';

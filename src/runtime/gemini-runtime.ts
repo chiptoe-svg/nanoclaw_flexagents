@@ -92,8 +92,9 @@ export class GeminiRuntime implements AgentRuntime {
     }
   }
 
-  shouldClearSession(_error: string): boolean {
-    return false;
+  shouldClearSession(error: string): boolean {
+    // Clear on Gemini CLI errors that indicate stale state
+    return /session.*not found|cache.*expired|invalid.*session/i.test(error);
   }
 }
 

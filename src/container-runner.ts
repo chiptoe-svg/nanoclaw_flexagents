@@ -243,8 +243,28 @@ function buildVolumeMounts(
         readonly: false,
       });
     }
+  } else if (runtime === 'gemini') {
+    // Google Gemini: per-group .gemini/ with settings and skills
+    const groupGeminiDir = path.join(DATA_DIR, 'sessions', group.folder, '.gemini');
+    fs.mkdirSync(groupGeminiDir, { recursive: true });
+
+    // Sync skills
+    const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+    const skillsDst = path.join(groupGeminiDir, 'skills');
+    if (fs.existsSync(skillsSrc)) {
+      for (const sd of fs.readdirSync(skillsSrc)) {
+        const s = path.join(skillsSrc, sd);
+        if (fs.statSync(s).isDirectory()) fs.cpSync(s, path.join(skillsDst, sd), { recursive: true });
+      }
+    }
+
+    mounts.push({
+      hostPath: groupGeminiDir,
+      containerPath: '/home/node/.gemini',
+      readonly: false,
+    });
   } else {
-    // Other runtimes: writable home directory
+    // Unknown runtimes: writable home directory
     const groupHomeDir = path.join(DATA_DIR, 'sessions', group.folder, 'home');
     fs.mkdirSync(groupHomeDir, { recursive: true });
     mounts.push({
