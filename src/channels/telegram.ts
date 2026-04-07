@@ -162,16 +162,22 @@ export class TelegramChannel implements Channel {
         const hasSubscription = fs.existsSync(codexAuthFile);
         const currentModel = group?.containerConfig?.model || DEFAULT_MODEL;
         let authMode: string;
-        if (hasSubscription && hasApiKey) authMode = 'Subscription (+ API key fallback)';
+        if (hasSubscription && hasApiKey)
+          authMode = 'Subscription (+ API key fallback)';
         else if (hasSubscription) authMode = 'Subscription';
         else if (hasApiKey) authMode = 'API Key';
         else authMode = 'not configured';
-        ctx.reply(`Runtime: *Codex*\nModel: ${currentModel}\nAuth: ${authMode}`, { parse_mode: 'Markdown' });
+        ctx.reply(
+          `Runtime: *Codex*\nModel: ${currentModel}\nAuth: ${authMode}`,
+          { parse_mode: 'Markdown' },
+        );
         return;
       }
 
       // Base: no SDK-specific auth
-      ctx.reply(`Runtime: *${runtime}*\nNo SDK-specific auth configured.`, { parse_mode: 'Markdown' });
+      ctx.reply(`Runtime: *${runtime}*\nNo SDK-specific auth configured.`, {
+        parse_mode: 'Markdown',
+      });
     });
 
     // Command to view or switch model

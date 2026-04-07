@@ -137,7 +137,12 @@ function buildVolumeMounts(
     // OpenAI/Codex: mount host ~/.codex/ for subscription auth + sessions
     const hostCodexDir = path.join(process.env.HOME || '/home/node', '.codex');
     if (fs.existsSync(hostCodexDir)) {
-      const groupCodexDir = path.join(DATA_DIR, 'sessions', group.folder, '.codex');
+      const groupCodexDir = path.join(
+        DATA_DIR,
+        'sessions',
+        group.folder,
+        '.codex',
+      );
       fs.mkdirSync(groupCodexDir, { recursive: true });
 
       // Copy auth.json from host (subscription credentials)
@@ -157,7 +162,9 @@ function buildVolumeMounts(
         for (const skillDir of fs.readdirSync(skillsSrc)) {
           const srcDir = path.join(skillsSrc, skillDir);
           if (!fs.statSync(srcDir).isDirectory()) continue;
-          fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
+          fs.cpSync(srcDir, path.join(skillsDst, skillDir), {
+            recursive: true,
+          });
         }
       }
 
