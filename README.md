@@ -34,23 +34,7 @@ Here is the comparison of capabilties between the two:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    padding: 24px;
-    line-height: 1.5;
-  }
-  h1 {
-    font-size: 20px;
-    margin-bottom: 8px;
-  }
-  .subtitle {
-    color: var(--text-muted);
-    font-size: 14px;
-    margin-bottom: 20px;
-  }
+  
   table {
     width: 100%;
     border-collapse: collapse;
