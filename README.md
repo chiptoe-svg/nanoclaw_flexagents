@@ -35,11 +35,7 @@ Here is the comparison of capabilties between the two:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
+ 
   th {
     background: var(--bg-header);
     color: #fff;
