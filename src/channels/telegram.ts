@@ -154,19 +154,29 @@ export class TelegramChannel implements Channel {
       if (runtime === 'codex') {
         const envSecrets = readEnvFile(['OPENAI_API_KEY']);
         const hasApiKey = !!envSecrets.OPENAI_API_KEY;
-        const codexAuthFile = path.join(process.env.HOME || '/home/node', '.codex', 'auth.json');
+        const codexAuthFile = path.join(
+          process.env.HOME || '/home/node',
+          '.codex',
+          'auth.json',
+        );
         const hasSubscription = fs.existsSync(codexAuthFile);
         const currentModel = group?.containerConfig?.model || DEFAULT_MODEL;
         let authMode: string;
-        if (hasSubscription && hasApiKey) authMode = 'Subscription (+ API key fallback)';
+        if (hasSubscription && hasApiKey)
+          authMode = 'Subscription (+ API key fallback)';
         else if (hasSubscription) authMode = 'Subscription';
         else if (hasApiKey) authMode = 'API Key';
         else authMode = 'not configured';
-        ctx.reply(`Runtime: *Codex*\nModel: ${currentModel}\nAuth: ${authMode}`, { parse_mode: 'Markdown' });
+        ctx.reply(
+          `Runtime: *Codex*\nModel: ${currentModel}\nAuth: ${authMode}`,
+          { parse_mode: 'Markdown' },
+        );
         return;
       }
 
-      ctx.reply(`Runtime: *${runtime}*\nNo SDK-specific auth configured.`, { parse_mode: 'Markdown' });
+      ctx.reply(`Runtime: *${runtime}*\nNo SDK-specific auth configured.`, {
+        parse_mode: 'Markdown',
+      });
     });
 
     // Command to view or switch model

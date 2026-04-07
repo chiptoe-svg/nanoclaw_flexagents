@@ -136,21 +136,33 @@ function buildVolumeMounts(
   if (runtime === 'codex') {
     const hostCodexDir = path.join(process.env.HOME || '/home/node', '.codex');
     if (fs.existsSync(hostCodexDir)) {
-      const groupCodexDir = path.join(DATA_DIR, 'sessions', group.folder, '.codex');
+      const groupCodexDir = path.join(
+        DATA_DIR,
+        'sessions',
+        group.folder,
+        '.codex',
+      );
       fs.mkdirSync(groupCodexDir, { recursive: true });
       const authSrc = path.join(hostCodexDir, 'auth.json');
-      if (fs.existsSync(authSrc)) fs.copyFileSync(authSrc, path.join(groupCodexDir, 'auth.json'));
+      if (fs.existsSync(authSrc))
+        fs.copyFileSync(authSrc, path.join(groupCodexDir, 'auth.json'));
       const configSrc = path.join(hostCodexDir, 'config.toml');
-      if (fs.existsSync(configSrc)) fs.copyFileSync(configSrc, path.join(groupCodexDir, 'config.toml'));
+      if (fs.existsSync(configSrc))
+        fs.copyFileSync(configSrc, path.join(groupCodexDir, 'config.toml'));
       const skillsSrc = path.join(process.cwd(), 'container', 'skills');
       const skillsDst = path.join(groupCodexDir, 'skills');
       if (fs.existsSync(skillsSrc)) {
         for (const sd of fs.readdirSync(skillsSrc)) {
           const s = path.join(skillsSrc, sd);
-          if (fs.statSync(s).isDirectory()) fs.cpSync(s, path.join(skillsDst, sd), { recursive: true });
+          if (fs.statSync(s).isDirectory())
+            fs.cpSync(s, path.join(skillsDst, sd), { recursive: true });
         }
       }
-      mounts.push({ hostPath: groupCodexDir, containerPath: '/home/node/.codex', readonly: false });
+      mounts.push({
+        hostPath: groupCodexDir,
+        containerPath: '/home/node/.codex',
+        readonly: false,
+      });
     }
   }
 
@@ -240,10 +252,15 @@ function buildContainerArgs(
 
   // Runtime-specific credential injection is added by /add-agentSDK-* skills.
   if (runtime === 'codex') {
-    const hostAuthFile = path.join(process.env.HOME || '/home/node', '.codex', 'auth.json');
+    const hostAuthFile = path.join(
+      process.env.HOME || '/home/node',
+      '.codex',
+      'auth.json',
+    );
     if (!fs.existsSync(hostAuthFile)) {
       const secrets = readEnvFile(['OPENAI_API_KEY']);
-      if (secrets.OPENAI_API_KEY) args.push('-e', `OPENAI_API_KEY=${secrets.OPENAI_API_KEY}`);
+      if (secrets.OPENAI_API_KEY)
+        args.push('-e', `OPENAI_API_KEY=${secrets.OPENAI_API_KEY}`);
     }
     const groupBaseUrl = group.containerConfig?.baseUrl;
     const envSecrets = readEnvFile(['OPENAI_BASE_URL']);
