@@ -62,19 +62,9 @@ export interface ContainerSession {
 }
 
 export interface ContainerManager {
-  /** Get or create a container for a group. */
-  acquire(opts: {
-    group: RegisteredGroup;
-    runtime: RuntimeId;
-    forceNew?: boolean;
-  }): Promise<ContainerSession>;
-
-  /** Execute a single tool call inside a container. */
-  executeInContainer(call: ToolCall): Promise<ToolResult>;
-
   /**
    * Run a full agent session in a container.
-   * Used by ClaudeRuntime — the container runs the agent loop internally.
+   * Both runtimes delegate to this — the container handles the agent loop.
    */
   runAgentSession(opts: {
     group: RegisteredGroup;
@@ -94,38 +84,6 @@ export interface ContainerManager {
 
   /** Kill orphaned containers from previous runs. */
   cleanupOrphans(): void;
-}
-
-// --- Tool layer ---
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  execution: 'container' | 'host' | 'either';
-}
-
-export interface ToolResult {
-  content: string;
-  isError?: boolean;
-}
-
-export interface ToolCall {
-  name: string;
-  arguments: Record<string, unknown>;
-  context: ToolContext;
-}
-
-export interface ToolContext {
-  groupFolder: string;
-  chatJid: string;
-  isMain: boolean;
-  containerId?: string;
-}
-
-export interface ToolExecutor {
-  getTools(opts: { runtime: RuntimeId; isMain: boolean }): ToolDefinition[];
-  execute(call: ToolCall): Promise<ToolResult>;
 }
 
 // --- Agent runtime ---
@@ -153,7 +111,6 @@ export interface AgentRuntimeConfig {
   sessionId?: string;
   isScheduledTask?: boolean;
   script?: string;
-  toolExecutor: ToolExecutor;
   containerManager: ContainerManager;
   /** Callback to register the container process with the group queue */
   onProcess: (

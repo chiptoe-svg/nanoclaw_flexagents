@@ -22,29 +22,9 @@ import type {
   ContainerInput,
   ContainerManager as IContainerManager,
   ContainerOutput,
-  ContainerSession,
-  RuntimeId,
-  ToolCall,
-  ToolResult,
 } from './types.js';
 
 export class DefaultContainerManager implements IContainerManager {
-  async acquire(_opts: {
-    group: RegisteredGroup;
-    runtime: RuntimeId;
-    forceNew?: boolean;
-  }): Promise<ContainerSession> {
-    // Not used — both runtimes use runAgentSession() which manages its own container.
-    throw new Error('acquire() not needed — use runAgentSession()');
-  }
-
-  async executeInContainer(_call: ToolCall): Promise<ToolResult> {
-    // Not used — both SDKs have their own built-in tools inside the container.
-    throw new Error(
-      'executeInContainer() not needed — SDKs have built-in tools',
-    );
-  }
-
   async runAgentSession(opts: {
     group: RegisteredGroup;
     input: ContainerInput;

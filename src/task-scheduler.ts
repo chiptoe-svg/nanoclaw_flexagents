@@ -7,7 +7,6 @@ import type {
   AgentRuntime,
   ContainerManager,
   ContainerOutput,
-  ToolExecutor,
 } from './runtime/types.js';
 import { writeTasksSnapshot } from './runtime/container-manager.js';
 import {
@@ -78,7 +77,6 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
   createRuntime: (group: RegisteredGroup) => AgentRuntime;
   containerManager: ContainerManager;
-  toolExecutor: ToolExecutor;
 }
 
 async function runTask(
@@ -186,7 +184,6 @@ async function runTask(
       sessionId,
       isScheduledTask: true,
       script: task.script || undefined,
-      toolExecutor: deps.toolExecutor,
       containerManager: deps.containerManager,
       onProcess: (proc, containerName, groupFolder) =>
         deps.onProcess(task.chat_jid, proc, containerName, groupFolder),

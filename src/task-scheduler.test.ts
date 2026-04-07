@@ -47,7 +47,6 @@ describe('task scheduler', () => {
       sendMessage: async () => {},
       createRuntime: () => ({}) as any,
       containerManager: {} as any,
-      toolExecutor: {} as any,
     });
 
     await vi.advanceTimersByTimeAsync(10);

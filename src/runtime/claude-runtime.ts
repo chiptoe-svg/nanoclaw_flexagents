@@ -1,14 +1,9 @@
 /**
  * ClaudeRuntime — AgentRuntime implementation for Claude Agent SDK.
  *
- * Phase 1: Thin wrapper around ContainerManager.runAgentSession().
+ * Thin wrapper around ContainerManager.runAgentSession().
  * The container runs the full agent loop (Claude SDK query()) internally.
  * This adapter translates ContainerOutput into AgentEvents.
- *
- * Claude's built-in tools (Bash, Read, Write, Edit, Glob, Grep) run inside
- * the container via the SDK. ToolExecutor is not used for these — Claude's
- * built-in tools are a temporary bypass (they're better today), not the
- * permanent architecture. Long-term, all tools route through ToolExecutor.
  */
 import type {
   AgentEvent,

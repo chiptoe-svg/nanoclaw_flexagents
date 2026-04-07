@@ -25,7 +25,6 @@ import {
   getRegisteredAgentSdkNames,
 } from './runtime/registry.js';
 import { DefaultContainerManager } from './runtime/container-manager.js';
-import { DefaultToolExecutor } from './runtime/tool-executor.js';
 import {
   writeTasksSnapshot,
   writeGroupsSnapshot,
@@ -322,7 +321,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
 // Singletons — shared across all runtimes
 const containerManager = new DefaultContainerManager();
-const toolExecutor = new DefaultToolExecutor(containerManager);
 
 function createRuntime(group: RegisteredGroup): AgentRuntime {
   const sdk = group.containerConfig?.runtime || DEFAULT_RUNTIME;
@@ -407,7 +405,6 @@ async function runAgent(
       isMain,
       assistantName: ASSISTANT_NAME,
       sessionId,
-      toolExecutor,
       containerManager,
       onProcess: (proc, containerName, groupFolder) =>
         queue.registerProcess(chatJid, proc, containerName, groupFolder),
@@ -749,7 +746,6 @@ async function main(): Promise<void> {
     },
     createRuntime: createRuntime,
     containerManager,
-    toolExecutor,
   });
   startIpcWatcher({
     sendMessage: (jid, text) => {
