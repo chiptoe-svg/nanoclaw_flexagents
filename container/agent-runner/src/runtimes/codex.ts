@@ -8,8 +8,10 @@ import { Codex } from '@openai/codex-sdk';
 
 import {
   ContainerInput,
+  drainIpcInput,
   formatTranscriptMarkdown,
   log,
+  ParsedMessage,
   sanitizeFilename,
   shouldClose,
   writeOutput,
@@ -46,7 +48,6 @@ async function runCodexQuery(
       }
     }
   }
-  // Append Codex-specific tool guidance (not in AGENT.md because it's runtime-agnostic)
   agentsParts.push(CODEX_TOOL_GUIDANCE);
 
   if (agentsParts.length > 0) {
@@ -85,6 +86,19 @@ NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
     log('Wrote NanoClaw MCP config to Codex config.toml');
   }
 
+  // Discover additional directories (Fix #3)
+  const extraDirs: string[] = [];
+  const extraBase = '/workspace/extra';
+  if (fs.existsSync(extraBase)) {
+    for (const entry of fs.readdirSync(extraBase)) {
+      const fullPath = path.join(extraBase, entry);
+      if (fs.statSync(fullPath).isDirectory()) extraDirs.push(fullPath);
+    }
+  }
+  if (extraDirs.length > 0) {
+    log(`Additional directories: ${extraDirs.join(', ')}`);
+  }
+
   const codex = new Codex({
     apiKey: process.env.OPENAI_API_KEY,
     baseUrl: containerInput.baseUrl || process.env.OPENAI_BASE_URL,
@@ -96,11 +110,9 @@ NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
     sandboxMode: 'workspace-write' as const,
     approvalPolicy: 'never' as const,
     skipGitRepoCheck: true,
+    additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
   };
 
-  // Always start a fresh thread. Resuming threads across container restarts
-  // is unreliable ("no rollout found" errors). Conversation context is preserved
-  // via the conversations/ archive and memory/ directory instead.
   const thread = codex.startThread(threadOptions);
 
   let closedDuringQuery = false;
@@ -124,33 +136,49 @@ NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
     let resultText: string | null = null;
     let usage: { input_tokens: number; output_tokens: number } | null = null;
 
+    // Build rich archive from stream events (Fix #2)
+    const archiveMessages: ParsedMessage[] = [
+      { role: 'user', content: prompt },
+    ];
+    const toolCalls: string[] = [];
+
     for await (const event of streamedTurn.events) {
-      // Capture thread ID from first event
       if (event.type === 'thread.started') {
         newSessionId = event.thread_id;
-        log(`Codex thread: ${newSessionId} (${sessionId ? 'resumed' : 'new'})`);
+        log(`Codex thread: ${newSessionId} (new)`);
       }
 
-      // Log tool activity for visibility
+      // Log and capture tool activity
       if (event.type === 'item.started') {
         const item = event.item;
         if (item.type === 'command_execution') {
           log(`[tool] Running: ${item.command}`);
+          toolCalls.push(`$ ${item.command}`);
         } else if (item.type === 'mcp_tool_call') {
           log(`[tool] MCP: ${item.server}/${item.tool}`);
+          toolCalls.push(`MCP: ${item.server}/${item.tool}`);
         } else if (item.type === 'web_search') {
           log(`[tool] Web search: ${item.query}`);
+          toolCalls.push(`Search: ${item.query}`);
         } else if (item.type === 'file_change') {
-          log(`[tool] File changes: ${item.changes.map((c: { path: string }) => c.path).join(', ')}`);
+          const paths = item.changes.map((c: { path: string }) => c.path).join(', ');
+          log(`[tool] File changes: ${paths}`);
+          toolCalls.push(`Files: ${paths}`);
         }
       }
 
-      // Capture the final message
+      // Capture command output for archive
+      if (event.type === 'item.completed' && event.item.type === 'command_execution') {
+        const cmd = event.item;
+        if (cmd.aggregated_output) {
+          toolCalls.push(cmd.aggregated_output.slice(0, 500));
+        }
+      }
+
       if (event.type === 'item.completed' && event.item.type === 'agent_message') {
         resultText = event.item.text;
       }
 
-      // Capture usage
       if (event.type === 'turn.completed') {
         usage = event.usage;
       }
@@ -164,9 +192,19 @@ NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
       log(`Codex usage: ${usage.input_tokens} in, ${usage.output_tokens} out`);
     }
 
-    // Archive conversation
-    if (resultText) {
+    // Rich conversation archive (Fix #2)
+    if (resultText || toolCalls.length > 0) {
       try {
+        if (toolCalls.length > 0) {
+          archiveMessages.push({
+            role: 'assistant',
+            content: `[Tool calls]\n${toolCalls.join('\n')}`,
+          });
+        }
+        if (resultText) {
+          archiveMessages.push({ role: 'assistant', content: resultText });
+        }
+
         const conversationsDir = '/workspace/group/conversations';
         fs.mkdirSync(conversationsDir, { recursive: true });
         const date = new Date().toISOString().split('T')[0];
@@ -175,10 +213,7 @@ NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
         fs.writeFileSync(
           filePath,
           formatTranscriptMarkdown(
-            [
-              { role: 'user', content: prompt },
-              { role: 'assistant', content: resultText },
-            ],
+            archiveMessages,
             prompt.slice(0, 50),
             containerInput.assistantName,
           ),
@@ -190,6 +225,28 @@ NANOCLAW_IS_MAIN = "${containerInput.isMain ? '1' : '0'}"
     }
 
     writeOutput({ status: 'success', result: resultText, newSessionId });
+
+    // Check for IPC messages that arrived during this turn (Fix #1)
+    // Feed them as a follow-up turn so the user's mid-turn messages
+    // get processed immediately instead of waiting for next container cycle.
+    ipcPolling = false;
+    const pendingMessages = drainIpcInput();
+    if (pendingMessages.length > 0 && !closedDuringQuery) {
+      log(`Processing ${pendingMessages.length} IPC message(s) that arrived during turn`);
+      const followUp = pendingMessages.join('\n');
+      const followUpTurn = await thread.runStreamed(followUp);
+      let followUpResult: string | null = null;
+
+      for await (const event of followUpTurn.events) {
+        if (event.type === 'item.completed' && event.item.type === 'agent_message') {
+          followUpResult = event.item.text;
+        }
+      }
+
+      if (followUpResult) {
+        writeOutput({ status: 'success', result: followUpResult, newSessionId });
+      }
+    }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     log(`Codex error: ${error}`);
