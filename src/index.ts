@@ -3,7 +3,6 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
-  CREDENTIAL_PROXY_PORT,
   DEFAULT_RUNTIME,
   DEFAULT_TRIGGER,
   getTriggerPattern,
@@ -33,9 +32,7 @@ import type { AgentRuntime, ContainerOutput } from './runtime/types.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
-  PROXY_BIND_HOST,
 } from './container-runtime.js';
-import { startCredentialProxy } from './credential-proxy.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -604,16 +601,12 @@ async function main(): Promise<void> {
   loadState();
   restoreRemoteControl();
 
-  // Start credential proxy for Claude runtime
-  const proxyServer = await startCredentialProxy(
-    CREDENTIAL_PROXY_PORT,
-    PROXY_BIND_HOST,
-  );
+  // Credential proxy startup is added by /add-agentSDK-claude skill.
+  // Other SDKs handle credentials differently (env vars, auth files).
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
-    proxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
