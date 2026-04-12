@@ -12,22 +12,21 @@
 import fs from 'fs';
 import path from 'path';
 
+import {
+  materializeAuthMaterial,
+  prepareProviderAuthSync,
+  validateProviderAuthSync,
+} from './auth/backends.js';
+import type { AuthContext } from './auth/types.js';
 import { CREDENTIAL_PROXY_PORT } from './config.js';
 import { CONTAINER_HOST_GATEWAY } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
 
 // --- Types ---
 
-export interface RuntimeSetupContext {
-  group: RegisteredGroup;
-  runtime: string;
-  /** data/sessions/<folder> */
-  groupSessionsBase: string;
-  projectRoot: string;
-}
+export interface RuntimeSetupContext extends AuthContext {}
 
 export interface HomeMount {
   hostPath: string;
@@ -70,6 +69,12 @@ function prepareHomeDir(
 /** Copy a file from src to dst if src exists. */
 function copyIfExists(src: string, dst: string): void {
   if (fs.existsSync(src)) fs.copyFileSync(src, dst);
+}
+
+function createMinimalHome(ctx: RuntimeSetupContext): HomeMount {
+  const homeDir = path.join(ctx.groupSessionsBase, 'home');
+  fs.mkdirSync(homeDir, { recursive: true });
+  return { hostPath: homeDir, containerPath: '/home/node' };
 }
 
 // --- Claude ---
@@ -117,39 +122,36 @@ const claudeSetup: RuntimeSetup = {
 
 const codexSetup: RuntimeSetup = {
   prepareHome(ctx) {
-    const hostCodexDir = path.join(process.env.HOME || '/home/node', '.codex');
+    // Transitional behavior: only provision a runtime-specific home when the
+    // compatibility file backend has actual material to write. Env-only auth
+    // keeps the existing minimal /home/node mount.
+    const material = prepareProviderAuthSync(ctx);
+    const authValidation = validateProviderAuthSync(ctx);
+    if (authValidation.warnings) {
+      for (const warning of authValidation.warnings) {
+        logger.warn({ runtime: ctx.runtime, group: ctx.group.name }, warning);
+      }
+    }
+    if (authValidation.errors) {
+      for (const error of authValidation.errors) {
+        logger.warn({ runtime: ctx.runtime, group: ctx.group.name }, error);
+      }
+    }
 
-    if (!fs.existsSync(hostCodexDir)) {
-      // No host config — minimal writable home (no skills target)
-      const homeDir = path.join(ctx.groupSessionsBase, 'home');
-      fs.mkdirSync(homeDir, { recursive: true });
-      return { hostPath: homeDir, containerPath: '/home/node' };
+    if (!material.files || material.files.length === 0) {
+      return createMinimalHome(ctx);
     }
 
     const { homeDir, mount } = prepareHomeDir(ctx, '.codex', '/home/node/.codex');
+    materializeAuthMaterial(homeDir, material);
 
-    // Copy subscription credentials + config from host
-    copyIfExists(path.join(hostCodexDir, 'auth.json'), path.join(homeDir, 'auth.json'));
-    copyIfExists(path.join(hostCodexDir, 'config.toml'), path.join(homeDir, 'config.toml'));
-
+    // TODO: Enforce sandboxProfile-aware launch policy in container-runner once
+    // the runtime-specific security profiles are wired through container args.
     return mount;
   },
 
   getCredentialEnv(ctx) {
-    const env: Record<string, string> = {};
-
-    // API key fallback when no subscription auth
-    const hostAuth = path.join(process.env.HOME || '/home/node', '.codex', 'auth.json');
-    if (!fs.existsSync(hostAuth)) {
-      const secrets = readEnvFile(['OPENAI_API_KEY']);
-      if (secrets.OPENAI_API_KEY) env.OPENAI_API_KEY = secrets.OPENAI_API_KEY;
-    }
-
-    // Custom base URL: per-group > global .env
-    const baseUrl = ctx.group.containerConfig?.baseUrl || readEnvFile(['OPENAI_BASE_URL']).OPENAI_BASE_URL;
-    if (baseUrl) env.OPENAI_BASE_URL = baseUrl;
-
-    return env;
+    return prepareProviderAuthSync(ctx).env || {};
   },
 };
 
@@ -180,9 +182,7 @@ const fallbackSetup: RuntimeSetup = {
       { runtime: ctx.runtime, group: ctx.group.name },
       'Unknown runtime — using minimal home directory with no credentials',
     );
-    const homeDir = path.join(ctx.groupSessionsBase, 'home');
-    fs.mkdirSync(homeDir, { recursive: true });
-    return { hostPath: homeDir, containerPath: '/home/node' };
+    return createMinimalHome(ctx);
   },
 
   getCredentialEnv(ctx) {
@@ -207,4 +207,11 @@ export function getRuntimeSetup(runtime: string): RuntimeSetup {
 }
 
 /** Visible for testing. */
-export const _testing = { RUNTIME_SETUP, fallbackSetup, syncSkills, prepareHomeDir, copyIfExists };
+export const _testing = {
+  RUNTIME_SETUP,
+  fallbackSetup,
+  syncSkills,
+  prepareHomeDir,
+  copyIfExists,
+  createMinimalHome,
+};

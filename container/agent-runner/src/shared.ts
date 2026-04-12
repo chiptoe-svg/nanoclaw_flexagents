@@ -24,6 +24,8 @@ export interface ContainerInput {
   assistantName?: string;
   script?: string;
   runtime?: 'claude' | 'codex' | string;
+  runtimeOptions?: Record<string, unknown>;
+  // Legacy compatibility shim for runtimes not yet migrated to runtimeOptions.
   model?: string;
   baseUrl?: string;
 }
@@ -293,6 +295,13 @@ export function getMcpServerConfig(
   mcpServerPath: string,
   containerInput: ContainerInput,
 ) {
+  const modelRef =
+    typeof containerInput.runtimeOptions?.modelRef === 'string'
+      ? containerInput.runtimeOptions.modelRef
+      : typeof containerInput.runtimeOptions?.model === 'string'
+        ? containerInput.runtimeOptions.model
+        : containerInput.model || '';
+
   return {
     nanoclaw: {
       command: 'node',
@@ -302,7 +311,7 @@ export function getMcpServerConfig(
         NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
         NANOCLAW_RUNTIME: containerInput.runtime || 'claude',
-        NANOCLAW_MODEL: containerInput.model || '',
+        NANOCLAW_MODEL: modelRef,
       },
     },
   };
