@@ -18,7 +18,7 @@ import {
   shouldClose,
   writeOutput,
 } from '../shared.js';
-import { getProviderCodexToml, getProviderAgentDocs } from '../provider-registry.js';
+import { getProviderCodexToml } from '../provider-registry.js';
 import { registerContainerRuntime, type QueryResult } from '../runtime-registry.js';
 
 // --- Auto-compaction ---
@@ -85,11 +85,9 @@ async function runCodexQuery(
   }
   agentsParts.push(CODEX_TOOL_GUIDANCE);
 
-  // Append provider-specific docs (MS365, GWS, etc.)
-  const providerDocs = getProviderAgentDocs();
-  if (providerDocs) {
-    agentsParts.push(providerDocs);
-  }
+  // Provider docs (MS365, GWS usage instructions) are NOT injected globally.
+  // They live in the skills that use them (/email-archive, /add-email-account)
+  // and are only loaded when the user's prompt matches a skill trigger.
 
   // Pre-inject skills into AGENTS.md to avoid Codex reading them via tool calls.
   // Match the user's prompt against skill names/descriptions to inject the full
