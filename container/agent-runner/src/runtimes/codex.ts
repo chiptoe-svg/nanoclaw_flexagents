@@ -112,20 +112,29 @@ NANOCLAW_MODEL = "${modelRef}"
 
   // Provider-based MCP servers (MS365, etc.)
   // Each provider JSON in /workspace/.providers/ can declare an MCP server.
+  // Always overwrite provider blocks to ensure env vars are current —
+  // stale persisted configs may lack env vars added by the provider registry.
   const providerToml = getProviderCodexToml();
   if (providerToml) {
-    const currentConfig = fs.readFileSync(configTomlPath, 'utf-8');
-    // Only append providers not already in config
-    const newBlocks = providerToml
-      .split('\n\n')
-      .filter((block) => {
-        const match = block.match(/\[mcp_servers\.(\w+)\]/);
-        return match && !currentConfig.includes(`[mcp_servers.${match[1]}]`);
-      });
-    if (newBlocks.length > 0) {
-      fs.writeFileSync(configTomlPath, currentConfig + '\n' + newBlocks.join('\n\n'));
-      log(`Wrote ${newBlocks.length} provider MCP config(s) to Codex config.toml`);
+    let currentConfig = fs.readFileSync(configTomlPath, 'utf-8');
+    // Remove existing provider blocks so we can write fresh ones with env vars
+    for (const block of providerToml.split('\n\n')) {
+      const match = block.match(/\[mcp_servers\.(\w+)\]/);
+      if (match) {
+        // Remove old block: from [mcp_servers.X] to next [section] or EOF
+        const sectionHeader = `[mcp_servers.${match[1]}]`;
+        const startIdx = currentConfig.indexOf(sectionHeader);
+        if (startIdx !== -1) {
+          // Find the next top-level section (starts with [ at line beginning)
+          const afterHeader = currentConfig.indexOf('\n[', startIdx + sectionHeader.length);
+          const endIdx = afterHeader !== -1 ? afterHeader : currentConfig.length;
+          currentConfig = currentConfig.slice(0, startIdx) + currentConfig.slice(endIdx);
+        }
+      }
     }
+    // Append fresh provider blocks with resolved env vars
+    fs.writeFileSync(configTomlPath, currentConfig.trimEnd() + '\n\n' + providerToml + '\n');
+    log('Wrote provider MCP config(s) to Codex config.toml');
   }
 
   // Discover additional directories (Fix #3)
