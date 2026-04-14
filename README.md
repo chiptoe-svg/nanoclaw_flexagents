@@ -14,9 +14,33 @@
 
 ---
 
-## Why FlexAgents
+## About This Fork
 
-<!-- DRAFT — narrative for your review/editing -->
+This fork adapts [NanoClaw FlexAgents](https://github.com/chiptoe-svg/nanoclaw_flexagents) for use in a university environment — specifically supporting curriculum development, academic advising, research operations, and department administration at Clemson University. The work requires operating within institutional privacy guidelines, including restricted Azure AD tenant policies, FERPA-adjacent data handling considerations, and controlled access to university email and calendar systems.
+
+### Active Projects
+
+- **Email Triage & Inbox Management** — Hourly scanning of university Gmail and Outlook accounts, identifying actionable emails (responses needed, deadlines, reviews), creating tracked to-do items, and filing completed items into an organized taxonomy. Sender-based rules handle high-volume institutional mail (listservs, automated notifications) while the agent assesses individual emails for required action. Built with provider-agnostic architecture so the same skills work across Google Workspace and Microsoft 365.
+
+- **MS365 Integration Under Tenant Restrictions** — The university's Azure AD tenant requires admin consent for API permissions, blocking the typical OAuth self-service flow. This fork includes permission discovery tooling that works within these constraints — building the MCP tool filter from explicitly granted permissions rather than requesting scopes the tenant will reject.
+
+- **Multi-Runtime Agent Support** — Using Codex (OpenAI) as the primary runtime with Claude and Gemini available for specific tasks. The ability to switch runtimes per group means privacy-sensitive work can use local models via Ollama while general tasks use cloud APIs.
+
+- **Knowledge Extraction to Obsidian** — Planned off-hours extraction of knowledge from filed emails into an Obsidian vault, organized by date and topic. Separates the expensive comprehension work from real-time triage.
+
+### Privacy Considerations
+
+University email contains student information, personnel records, budget data, and research communications. This fork's architecture keeps sensitive data within controlled boundaries:
+
+- Agents run in containers with explicit mount scoping — they only see what's mounted
+- Provider tokens are only mounted for authorized groups
+- The MS365 `--enabled-tools` regex ensures the agent only requests OAuth scopes the tenant has approved
+- Local model support via Codex means sensitive classification can run without sending data to cloud APIs
+- Email content stays in provider systems — the agent reads and files but never stores email bodies locally
+
+---
+
+## Why FlexAgents
 
 [NanoClaw](https://github.com/qwibitai/nanoclaw) is a brilliant piece of software — a personal AI assistant that's small enough to understand, secure by design, and built to be customized. But it's built entirely on the Claude Agent SDK, which means you need an Anthropic subscription, you can't use local models for privacy-sensitive work, and you're locked to one provider.
 
@@ -362,7 +386,7 @@ Skills we'd like to see:
 - `/add-signal` — Signal as a channel
 - `/add-agentSDK-*` — Additional agent SDK adapters
 - IMAP MCP server — Enable IMAP email accounts (provider JSON ready at `container/providers/imap.json`)
-- `/add-email-triage` — Daily inbox management and action item tracking
+- Apple Reminders integration — SSE transport for host-side MCP servers with EventKit push triggers
 
 ## Requirements
 
