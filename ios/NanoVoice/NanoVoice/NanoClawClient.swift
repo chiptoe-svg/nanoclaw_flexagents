@@ -111,7 +111,7 @@ class NanoClawClient: ObservableObject {
         request.setValue("Bearer \(server.apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 300
 
-        let body: [String: String] = ["text": text, "apiKey": server.apiKey]
+        let body: [String: String] = ["text": text]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         await MainActor.run { isLoading = true }

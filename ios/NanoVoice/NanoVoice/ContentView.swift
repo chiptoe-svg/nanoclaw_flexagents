@@ -440,9 +440,10 @@ struct ServerEditView: View {
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(server.apiKey)", forHTTPHeaderField: "Authorization")
                 request.timeoutInterval = 30
 
-                let body: [String: String] = ["text": "ping", "apiKey": server.apiKey]
+                let body: [String: String] = ["text": "ping"]
                 request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
                 let (_, response) = try await URLSession.shared.data(for: request)

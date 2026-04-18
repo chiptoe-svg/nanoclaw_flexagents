@@ -20,9 +20,16 @@ import type {
   RegisteredGroup,
 } from '../types.js';
 
-const envSecrets = readEnvFile(['HTTP_API_KEY', 'HTTP_API_PORT']);
+const envSecrets = readEnvFile([
+  'HTTP_API_KEY',
+  'HTTP_API_PORT',
+  'HTTP_API_BIND',
+]);
 const HTTP_API_PORT = parseInt(envSecrets.HTTP_API_PORT || '3100', 10);
 const HTTP_API_KEY = envSecrets.HTTP_API_KEY || '';
+// Defaults to loopback. Expose on the LAN/tailnet by setting HTTP_API_BIND=0.0.0.0
+// in .env, but only after fronting NanoClaw with TLS (e.g. `tailscale serve`).
+const HTTP_API_BIND = envSecrets.HTTP_API_BIND || '127.0.0.1';
 
 interface PendingResponse {
   resolve: (text: string) => void;
@@ -41,19 +48,10 @@ function createHttpApiChannel(opts: ChannelOpts): Channel | null {
   const pending = new Map<string, PendingResponse>();
 
   const server = http.createServer(async (req, res) => {
-    // CORS headers for iOS app
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader(
-      'Access-Control-Allow-Headers',
-      'Content-Type, Authorization',
-    );
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
+    // No CORS headers by design. Native clients (NanoVoice) don't enforce CORS,
+    // so advertising Access-Control-Allow-Origin:* only widens the browser-side
+    // attack surface (DNS rebinding, malicious pages probing the local network).
+    // If a browser client is ever needed, add an explicit allowlist here.
 
     if (req.method !== 'POST' || req.url !== '/api/message') {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -65,7 +63,7 @@ function createHttpApiChannel(opts: ChannelOpts): Channel | null {
     let body = '';
     for await (const chunk of req) body += chunk;
 
-    let parsed: { text?: string; apiKey?: string; group?: string };
+    let parsed: { text?: string; group?: string };
     try {
       parsed = JSON.parse(body);
     } catch {
@@ -74,9 +72,14 @@ function createHttpApiChannel(opts: ChannelOpts): Channel | null {
       return;
     }
 
-    // Auth check
-    const apiKey =
-      parsed.apiKey || req.headers.authorization?.replace('Bearer ', '');
+    // Auth check: Authorization: Bearer <token> only.
+    // The key is deliberately NOT accepted in the JSON body — request bodies
+    // are more likely to end up in access logs, proxies, and tcpdump captures
+    // than header-only auth.
+    const authHeader = req.headers.authorization;
+    const apiKey = authHeader?.startsWith('Bearer ')
+      ? authHeader.slice('Bearer '.length).trim()
+      : undefined;
     if (!apiKey || apiKey !== HTTP_API_KEY) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Invalid API key' }));
@@ -172,8 +175,11 @@ function createHttpApiChannel(opts: ChannelOpts): Channel | null {
 
     async connect() {
       return new Promise<void>((resolve) => {
-        server.listen(HTTP_API_PORT, '0.0.0.0', () => {
-          logger.info({ port: HTTP_API_PORT }, 'HTTP API channel listening');
+        server.listen(HTTP_API_PORT, HTTP_API_BIND, () => {
+          logger.info(
+            { host: HTTP_API_BIND, port: HTTP_API_PORT },
+            'HTTP API channel listening',
+          );
           resolve();
         });
       });
