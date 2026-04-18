@@ -6,7 +6,6 @@
 // gmail
 
 // http-api
-import './http-api.js';
 
 // slack
 
