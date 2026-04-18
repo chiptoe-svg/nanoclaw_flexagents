@@ -69,6 +69,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { startRemindersReconciler } from './reminders-reconciler.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -820,6 +821,30 @@ async function main(): Promise<void> {
     },
   });
   startSessionCleanup();
+
+  // Reconciliation poll for Apple Reminders: when the user tap-completes a
+  // reminder on their iPhone, this picks it up and enqueues a filing task.
+  // Safe if the reminders host isn't installed — it just skips each tick.
+  startRemindersReconciler({
+    registeredGroups: () => registeredGroups,
+    onTaskCreated: () => {
+      const tasks = getAllTasks();
+      const taskRows = tasks.map((t) => ({
+        id: t.id,
+        groupFolder: t.group_folder,
+        prompt: t.prompt,
+        script: t.script || undefined,
+        schedule_type: t.schedule_type,
+        schedule_value: t.schedule_value,
+        status: t.status,
+        next_run: t.next_run,
+      }));
+      for (const group of Object.values(registeredGroups)) {
+        writeTasksSnapshot(group.folder, group.isMain === true, taskRows);
+      }
+    },
+  });
+
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
