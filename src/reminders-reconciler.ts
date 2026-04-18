@@ -92,9 +92,7 @@ function saveSeen(entries: SeenEntry[]): void {
 
 function pruneSeen(entries: SeenEntry[]): SeenEntry[] {
   const cutoff = Date.now() - SEEN_TTL_MS;
-  return entries
-    .filter((e) => e.at >= cutoff)
-    .slice(-SEEN_MAX);
+  return entries.filter((e) => e.at >= cutoff).slice(-SEEN_MAX);
 }
 
 function tryParseEmailMeta(notes: string | null): EmailMetadata | null {
@@ -115,9 +113,7 @@ function tryParseEmailMeta(notes: string | null): EmailMetadata | null {
   }
 }
 
-async function fetchRecentlyCompleted(
-  host: string,
-): Promise<RemoteReminder[]> {
+async function fetchRecentlyCompleted(host: string): Promise<RemoteReminder[]> {
   const url = `${host}/reminders?status=recently_completed&limit=50`;
   let res: Response;
   try {
@@ -125,7 +121,10 @@ async function fetchRecentlyCompleted(
   } catch (err) {
     // Treat unreachable host as "nothing to reconcile this tick" — the Swift app
     // may be restarting, or the whole feature may not be installed on this host.
-    logger.debug({ err, host }, 'reminders host unreachable; skipping this poll');
+    logger.debug(
+      { err, host },
+      'reminders host unreachable; skipping this poll',
+    );
     return [];
   }
   if (!res.ok) {
@@ -160,7 +159,9 @@ function buildFilingPrompt(
     `- account: ${meta.account}`,
     meta.from ? `- from: ${meta.from}` : '',
     meta.subject ? `- subject: ${meta.subject}` : '',
-    meta.folder ? `- target folder: ${meta.folder}` : `- target folder: (not specified — look up from email-archive/rules.yaml)`,
+    meta.folder
+      ? `- target folder: ${meta.folder}`
+      : `- target folder: (not specified — look up from email-archive/rules.yaml)`,
     ``,
     `Use the appropriate MCP tool for the account (mcp__gws_mcp__*, mcp__ms365__*, or the legacy gws CLI) to move the message out of the inbox into the target folder. If the email is already out of the inbox, log that as the outcome.`,
   ]
@@ -183,10 +184,7 @@ export function startRemindersReconciler(deps: ReconcilerDeps): void {
   const seenEntryList: SeenEntry[] = seenEntries;
 
   const intervalMs = getIntervalMs();
-  logger.info(
-    { host: getHost(), intervalMs },
-    'reminders reconciler starting',
-  );
+  logger.info({ host: getHost(), intervalMs }, 'reminders reconciler starting');
 
   const tick = async (): Promise<void> => {
     try {
